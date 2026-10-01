@@ -1,81 +1,200 @@
-# OpenCap — Local-First CapCut Clone
+# OpenCap — Local-First Video Editor
 
-## 🎯 Project Vision & Core Mandate
-OpenCap is a high-performance, 100% local-first desktop video editor built to replicate CapCut's desktop features without paywalls, sign-ins, or cloud dependencies.
+A video editor that runs entirely on your machine. No account, no upload, no
+watermark, no paywall.
 
-- **Zero Sign-In & Accounts:** All projects, clips, and settings stay on your local disk.
-- **Zero Watermarks & Paywalls:** 100% free and open-source local rendering.
-- **Local Hardware Acceleration:** Preview via local GPU (WebGL/WebGPU) and export via native FFmpeg using local GPU encoders (NVENC, QuickSync, VideoToolbox).
-
----
-
-## 🛠️ Architecture & Tech Stack
-
-### Framework & Performance Pipeline
-- **Desktop Shell:** Tauri v2 (Rust) — Low memory footprint, fast IPC, small binary size.
-- **UI Framework:** React 19 + TypeScript + Vite + Tailwind CSS.
-- **Icons & UI Assets:** Lucide React + Radix UI primitives.
-- **State Engine:** Zustand (Normalized multi-track state, history stack for Undo/Redo, playhead sync).
-- **Preview Engine:** HTML5 Canvas + WebGL Shaders (Real-time compositing of text, fonts, video layers, and transforms at 60 FPS).
-- **Export & Processing:** Native FFmpeg CLI binary spawned via Rust sidecar process (translates project state into dynamic complex filtergraphs).
-- **Font & Asset Storage:** Web Font Loader / Canvas Font API + Local IndexedDB for caching assets locally.
+> **Status: working prototype.** The editing model, live preview and the FFmpeg
+> export compiler are implemented and tested. Several features from the original
+> design are *not* built yet — see [Not yet implemented](#not-yet-implemented).
+> This document describes what the code actually does today.
 
 ---
 
-## 🎨 Feature Specifications Matrix
+## Running it
 
-### 1. Multi-Track Video Editing & Cutting
-- **Precision Trimming & Splitting:** Frame-accurate cuts (`Ctrl+B` / `Cmd+B`), ripple edit, and slip/slide tools.
-- **Transform Gizmos:** Interactive on-canvas visual bounding box for position $(x, y)$, scale, rotation, and anchor point modification.
-- **Speed Ramping:** Variable speed curves (0.1x to 100x), pitch preservation, and reverse playback support.
-- **Keyframing System:** Keyframe support for opacity, position, scale, rotation, and filter intensities.
-- **Transitions:** Video/Image clip transitions (Fades, Wipes, Blurs, Slides, Zooms) compiled as WebGL shaders for live preview and FFmpeg xfade filters for export.
+```bash
+npm install
+npm run dev      # http://localhost:1420
+```
 
-### 2. Rich Text & Dynamic Subtitles
-- **Custom Font Engine:** Support for system fonts, Google Fonts integration, and local `.ttf` / `.otf` / `.woff2` font uploads.
-- **CapCut-Style Text Presets:** 3D text styling, stroke/outline width, dropshadows, glowing borders, background badges, and gradient fills.
-- **Text Animations:** In/Out/Loop text animations (Typewriter, Bounce, Fade, Glitch, Flip).
-- **Subtitles & Captions:** Dynamic auto-captions engine, manual subtitle sync, `.srt` / `.vtt` file import and export.
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Vite dev server with hot reload on port 1420 |
+| `npm run build` | Typecheck + production build into `dist/` |
+| `npm run preview` | Serve the built output |
+| `npm test` | 76 store unit tests |
+| `npm run test:ffmpeg` | 32 export tests that render real video (needs FFmpeg) |
 
-### 3. Visual Effects, Filters & Compositing
-- **Color Grading & Adjustment Layers:** Real-time controls for Exposure, Brightness, Contrast, Saturation, Temperature, Tint, Highlights, Shadows, and Vignette via GLSL shaders.
-- **Chroma Key (Green Screen):** Color picker for background removal with tolerance and edge-feathering controls.
-- **Masking:** Shape masks (Rectangle, Circle, Linear Split, Star) with feathering and invert options.
-- **Stickers & Overlays:** PNG/GIF/SVG overlay support, blend modes (Multiply, Screen, Overlay, Soft Light, Darken).
-
-### 4. Audio Engine & Sound Design
-- **Multi-Track Audio:** Separate music, voiceover, and sound effect tracks.
-- **Audio Controls:** Volume gain, mute, solo, stereo panning, fade-in/fade-out handles.
-- **Equalizer & Effects:** Pitch shifting, noise reduction, and basic EQ presets.
-- **Waveform Rendering:** High-performance Canvas-rendered audio waveforms for accurate beat matching and cutting.
+**Requirements:** Node 18+, and FFmpeg on `PATH` for exporting. There is no
+Rust/Tauri shell yet, so this runs as a web app in the browser despite the
+"desktop" framing of the original design.
 
 ---
 
-## 🏗️ Directory Architecture
+## Architecture
+
+- **UI:** React 19 + TypeScript + Vite, hand-written CSS (no Tailwind, no Radix).
+- **State:** Zustand. `useTimelineStore` holds the document; `useHistoryStore`
+  keeps whole-snapshot undo/redo; `useFontStore` tracks uploaded fonts.
+- **Preview:** Canvas 2D compositor (`engine/canvasCompositor.ts`) behind a
+  `Compositor` interface, so a WebGL2 backend can replace it later.
+- **Playback:** `requestAnimationFrame` loop accumulating a float frame cursor,
+  so the playhead lands on whole frames without drift.
+- **Export:** `engine/ffmpegBuilder.ts` compiles the document into a single
+  FFmpeg filtergraph. Pure and framework-free so it can be asserted in tests
+  without spawning a process.
+
+### Time is stored in frames, never seconds
+
+`types/timeline.ts` keeps every position and duration as an integer frame count.
+Floating-point seconds accumulate drift and make frame-accurate trimming
+impossible. Conversion to seconds happens only at the edges — playback, and
+FFmpeg filter expressions.
+
+### Track model
+
+Tracks are **created automatically**. `ensureTrackFor(kind, start, duration,
+preferTop)` returns the lowest (or highest) track of a kind that is free across
+the requested range, and creates one only when every track is occupied. Clips
+that merely abut share a boundary legally and do not count as overlapping.
+
+There is deliberately **no "add track" button**: you drop media or a text
+overlay wherever you want and the timeline grows to accommodate it. Text uses
+`preferTop` so it always layers *above* the footage.
+
+---
+## Feature status
+
+### Working and tested
+
+**Timeline editing**
+- Frame-accurate split at the playhead (`Ctrl+B`), with source offsets preserved
+- Trim via drag handles on either edge, correctly bounded by source duration
+- Speed changes that recompute duration and refuse to overrun the source
+- Reverse playback (video and audio)
+- Drag clips between tracks; drag media in from the Library or the desktop,
+  with a drop indicator showing the exact landing frame
+- Per-track mute / hide / lock
+- **Magnetic snapping** to the playhead and to every other clip's head/tail,
+  picking whichever edge lands closest. Toggleable from the toolbar.
+- **Ripple delete** — deleting a clip closes the gap on its own track only.
+  Deleting a contiguous run shifts by the combined duration exactly once.
+  Toggleable from the toolbar.
+- **Transitions** on a clip's head (dissolve, wipes, slides, blur, zoom) with an
+  adjustable length, previewed as a cross-fade in the canvas.
+
+**Presets**
+- **8 text presets** (Plain, Outline, Neon, Sunset, Boxed, Cinema, Pop,
+  Typewriter) applied in one click
+- **9 colour looks** (Original, Cinematic, Vlog, Warm, Cool, B&W, Punch, Retro,
+  Fade) layered on top of the manual adjustment sliders
+
+**Preview**
+- Live compositing of video, image, text and sticker layers
+- On-canvas **gizmo**: drag to move, corner handle to scale, top handle to
+  rotate, on any selected clip
+- Colour grading: brightness, contrast, saturation, exposure, temperature,
+  vignette — applied to text as well as media
+- Chroma key with similarity and smoothness
+- Masks: rectangle, circle, star, linear-split, with feather and invert
+- Transform: position, scale, rotation, opacity — with keyframes
+- Keyframed properties evaluated per frame (position, scale, rotation, opacity)
+
+**Text**
+- Content, font family (system or uploaded `.ttf`/`.otf`/`.woff2`), size, weight,
+  colour, alignment
+- Stroke width + colour, shadow blur/colour/X/Y, glow blur + colour
+- Gradient fill **with both colour stops**, background badge + padding
+- In animations: typewriter, bounce, fade, glitch, flip
+
+**Canvas**
+- Aspect-ratio presets (9:16, 16:9, 1:1, 4:5, 4:3, 21:9) plus custom W/H
+- The first media imported adopts its own aspect ratio, so a landscape clip is
+  not letterboxed into a portrait project
+- Sizes are rounded down to even numbers, as H.264 requires
+
+**Export (FFmpeg filtergraph)**
+- Trim, speed (`atempo`, chained beyond 2×), reverse
+- Colour grade, chroma key, masks, transforms
+- Keyframes compiled to FFmpeg expressions, so export is a single decode/encode
+- Styled text via `drawtext`, including uploaded fonts via explicit `fontfile`
+- Audio: gain, pan, mute, fades, mixdown with a limiter to prevent clipping
+- Encoder selection: libx264, NVENC, QuickSync, VideoToolbox
+
+### Not yet implemented
+
+These are on the roadmap but **do not exist**. Do not expect them:
+
+- **In-app rendering.** The Export dialog compiles and displays the FFmpeg
+  command; there is no sidecar to execute it. Run the command manually.
+- **Transitions in the exported file.** Transitions are stored, editable and
+  previewed as a cross-fade, but the export compiler does not yet emit `xfade`.
+  **An exported project currently renders a hard cut where a transition is.**
+- **Auto-captions / speech-to-text.** Would require shipping a speech model
+  (e.g. Whisper.wasm) and downloading model weights at runtime.
+- **AI background removal** (beyond chroma key).
+- **Speed / velocity ramping and speed-curve presets** (Hero, Bullet Time…).
+  There is a single speed control, not a curve.
+- **GLSL effects library** (glitch, shake, flash, RGB split). The compositor is
+  Canvas 2D; there is no shader pipeline.
+- **LUT files.** The colour presets are parameter sets, not `.cube` LUTs.
+- **Audio waveforms** drawn inside timeline clips.
+- **Stock audio / SFX / stickers / music library.** Needs bundled or fetched
+  assets plus licensing review.
+- **Subtitles / captions**, `.srt` and `.vtt` import/export
+- **Multi-select gizmo**, centre alignment guides, aspect-ratio lock on canvas
+- **Equalizer, pitch shifting, noise reduction**
+- **WebGL renderer** — the preview is Canvas 2D
+- **Tauri desktop shell** — no Rust, no `src-tauri/`
+- **Project save/load** — state lives in memory and is lost on refresh
+- **Adjustment layers** (the clip kind exists but is inert)
+
+### Known rough edges
+
+- **Gradient fills, glow and text animations do not survive export.** `drawtext`
+  cannot express them, so the exported video differs from the preview. They are
+  implemented in the canvas compositor only.
+- **Audio-track detection is best-effort.** Browsers cannot reliably report
+  whether a file has audio before decoding it. `Clip.hasAudio` is probed at
+  import; unknown defaults to audible, so a silent WebM can fail at export.
+- **Undo granularity is per-change, not per-action.** Dragging a slider records
+  many small steps rather than one coalesced step.
+- **Star masks are drawn as diamonds.** `geq` cannot express a five-point star
+  polygon compactly.
+- **Snapping tolerance is a flat 8 frames**, so at high zoom it can feel coarse
+  and at low zoom it may grab a clip you did not intend.
+
+---
+
+## Testing approach
+
+The export tests are genuine integration tests: each builds a project, runs a
+real `ffmpeg` command, and probes the output with `ffprobe` to assert duration,
+dimensions and stream layout. They skip cleanly (exit 0) when FFmpeg is absent.
+
+This caught bugs that reading the code did not, including FFmpeg rejecting
+`c=none` on `rotate`, `chromakey` silently parsing a fourth positional argument
+as a boolean, `colorlevels` overflowing its documented ranges, duplicate filter
+labels invalidating an entire graph, and a Windows FFmpeg build whose missing
+fontconfig made `drawtext` crash unless given an explicit `fontfile`.
+
+---
+
+## Layout
 
 ```text
-├── src/                          # React + TypeScript Frontend
-│   ├── components/
-│   │   ├── Timeline/             # Multi-track timeline, tracks, playhead, trim handles, cuts
-│   │   ├── Viewport/             # Canvas/WebGL preview player with transform gizmos
-│   │   ├── Library/              # Media intake, custom fonts, stickers, text presets
-│   │   ├── Inspector/            # Clip properties, text/font styling, speed curves, color filters
-│   │   └── Common/               # Modal dialogs, sliders, color pickers, curve editors
-│   ├── store/
-│   │   ├── useTimelineStore.ts   # Main Zustand timeline store (Tracks, clips, playhead, cuts)
-│   │   ├── useFontStore.ts       # Loaded custom fonts and text style presets
-│   │   └── useHistoryStore.ts    # Undo/Redo state stack management
-│   ├── engine/
-│   │   ├── frameLoop.ts          # requestAnimationFrame sync loop (60 FPS player)
-│   │   ├── webglRenderer.ts      # WebGL shader engine for video, text overlays, and filters
-│   │   ├── fontLoader.ts         # Font face loader for custom TTF/OTF files
-│   │   └── ffmpegBuilder.ts      # Complex FFmpeg filtergraph compiler for video export
-│   ├── App.tsx
-│   └── main.tsx
-├── src-tauri/                    # Rust Backend (Tauri v2)
-│   ├── src/
-│   │   ├── lib.rs                # Tauri IPC commands & native window settings
-│   │   ├── ffmpeg.rs             # Native FFmpeg sidecar execution and progress parser
-│   │   └── main.rs
-│   └── Cargo.toml
-└── README.md                     # Context and instructions for AI agents and developers
+src/
+├── components/
+│   ├── Timeline/      # tracks, clips, playhead, trim handles
+│   ├── Viewport/      # canvas preview + transport
+│   ├── Library/       # media intake, text, font upload
+│   ├── Inspector/     # per-clip properties
+│   └── Common/        # controls, export dialog
+├── store/             # timeline, history, fonts
+├── engine/            # compositor, frame loop, keyframes, fonts, ffmpeg builder
+├── types/timeline.ts  # domain model
+└── App.tsx
+tests/
+├── store.test.ts      # editing operations and auto-track behaviour
+└── ffmpeg.test.ts     # real renders through the export compiler
+```

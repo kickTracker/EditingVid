@@ -1,0 +1,29 @@
+{
+  "name": "opencap",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "tsx tests/store.test.ts",
+    "test:ffmpeg": "tsx tests/ffmpeg.test.ts",
+    "tauri": "tauri",
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly false"
+  },
+  "dependencies": {
+    "lucide-react": "^0.460.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tsx": "^4.23.15",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}
